@@ -1,3 +1,4 @@
+import math
 import zlib
 import struct
 import qrcode
@@ -6,11 +7,14 @@ import shutil
 import cv2
 import base64
 from tqdm import tqdm
+import reedsolo
 
 
 """"""
 # 参数配置
 bytes_per_frame = 1536  # 单块数据量
+rs_group_size = 200     # rs块分组大小
+rs_factor = 0.15        # 冗余率
 
 test_mode = False
 # FLAG_START = b'S'    # 起始标志
@@ -28,8 +32,9 @@ def read_and_divide(file_path):
         file_path (str): 文件路径
     返回:
         list[bytes]: 原始数据块
+        total(int): 块总数
     """
-    data_blocks = []
+    raw_data_blocks = []
     try:
         with open(file_path, 'rb') as file:
             # 循环读取指定大小的数据块
@@ -38,9 +43,9 @@ def read_and_divide(file_path):
                 block = file.read(bytes_per_frame)
                 if not block:  # 读取到文件末尾
                     break
-                data_blocks.append(block)
+                raw_data_blocks.append(block)
                 
-        return data_blocks
+        return raw_data_blocks, len(raw_data_blocks)
         
     except FileNotFoundError:
         raise FileNotFoundError(f"file not found in read and divide: {file_path}")
@@ -48,7 +53,7 @@ def read_and_divide(file_path):
         raise IOError(f"io error in read and divide: {str(e)}")
 
 
-def add_header(data_blocks):
+def add_header(data_blocks, total, last_block_length):
     """
     给所有数据块添加块头 
         去除 因为可以用超过index来表示冗余 编号表示起始和终止->定义标识符为bytes类型 分为起始、数据、终止、冗余
@@ -58,26 +63,16 @@ def add_header(data_blocks):
     返回：
         list[bytes]: 含块头的数据块
     """
-    total = len(data_blocks)
     headed_blocks = []
-    for index, block in tqdm(enumerate(data_blocks), desc="添加数据块头", total=total):
-        # # 确定当前块的标志
-        # if index == 0:
-        #     flag = FLAG_START
-        # elif index == total - 1:
-        #     flag = FLAG_END
-        # else:
-        #     flag = FLAG_DATA
-        # 添加块头
-        # headed_block = add_header_per_block(block, flag, index, total)
-        headed_block = add_header_per_block(block, index, total)
+    for index, block in tqdm(enumerate(data_blocks), desc="添加数据块头", total=len(data_blocks)):
+        headed_block = add_header_per_block(block, index, total, last_block_length)
         headed_blocks.append(headed_block)
 
     return headed_blocks
 
 
 # def add_header_per_block(block, flag, index, total):
-def add_header_per_block(block, index, total):
+def add_header_per_block(block, index, total, last_block_length):
     """
     给每个数据块进行crc并添加块头 块构成为([标识符])[块编号/总块数][CRC][数据]
 
@@ -94,15 +89,71 @@ def add_header_per_block(block, index, total):
     crc_bytes = struct.pack(">I", crc)
     # 拼接编号
     order = struct.pack(">HH", index, total)
+    # 处理末块
+    if index == total - 1:
+        length_bytes = struct.pack(">H", last_block_length)
+        block = block[:-2] + length_bytes
 
     if test_mode:
         print(f"index is : {index}, total is : {total}, crc is : {crc}")
     return order + crc_bytes + block
 
 
-def generate_global_rs():
-    """生成并添加全局冗余块"""
+def generate_rs_per_group(group_blocks):
+    """
+    对单组数据块进行垂直rs编码生成冗余块
+
+    参数：
+        group_blocks[bytes]: 单组原始数据块
+    返回：
+        list[bytes]: 该组冗余数据块
+    """
+    k = len(group_blocks)
+    nsym = math.ceil(k * rs_factor)
+    # n = k + nsym
+    # 垂直编码
+    coder = reedsolo.RSCodec(nsym)
+
+    rs_blocks = [bytearray(bytes_per_frame) for _ in range(nsym)]
+
+    for i in range(bytes_per_frame):
+        column_data = bytearray([block[i] for block in group_blocks])
+        encoded_column = coder.encode(column_data)
+        parity_bytes = encoded_column[k:]
+        
+        for j in range(nsym):
+            rs_blocks[j][i] = parity_bytes[j]
+
+    return [bytes(block) for block in rs_blocks]
+
+
+def generate_rs(raw_data_blocks):
+    """
+    生成并添加全局冗余块 首先记录最后一块字节长度并补齐同一长度 然后再rs
+
+    参数：
+        raw_data_blocks[bytes]: 原始数据块
+    返回：
+        data_blocks[bytes]: 添加了rs冗余块的数据块
+        last_block_length(int): 末块长度
+    """
+    last_block = raw_data_blocks[-1]
+    last_block_length = len(last_block)
+    # 补齐长度
+    padding_length = bytes_per_frame - last_block_length
+    if padding_length > 0:
+        last_block = last_block + b"z" * padding_length
+        raw_data_blocks[-1] = last_block
+    # 添加rs块
+    # 按组切分
+    for i in tqdm(range(0, len(raw_data_blocks), rs_group_size), 
+                  desc="按组添加rs块", 
+                  total=math.ceil(len(raw_data_blocks) / rs_group_size)):
+        group_blocks = raw_data_blocks[i : i + rs_group_size]
+        rs_blocks_per_group = generate_rs_per_group(group_blocks)
+        raw_data_blocks.extend(rs_blocks_per_group)
     
+    return raw_data_blocks, last_block_length
 
 
 def generate_qr_sequence(blocks, output_dir="frames_encode"):
@@ -179,12 +230,6 @@ def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 4):
 def main():
     import time
 
-    # if os.path.exists("test/frames_encode"):
-    #     shutil.rmtree("test/frames_encode")
-    # data_blocks = read_and_divide("test/input.bin")
-    # headed_blocks = add_header(data_blocks)
-    # image_paths = generate_qr_sequence(headed_blocks, "test/frames_encode")
-    # images_to_video(image_paths, "test/output.mp4")
     input_file_path = "test/jiheon.jpg"
     output_file_path = "test/output.mp4"
     frames_file_path = "test/frames_encode"
@@ -197,11 +242,15 @@ def main():
     
     # 记录各阶段开始时间（可选，用于分析各步骤耗时）
     read_start = time.time()
-    data_blocks = read_and_divide(input_file_path)
+    raw_data_blocks, total = read_and_divide(input_file_path)
     read_end = time.time()
+
+    rs_start = time.time()
+    data_blocks, last_block_length = generate_rs(raw_data_blocks)
+    rs_end = time.time()
     
     header_start = time.time()
-    headed_blocks = add_header(data_blocks)
+    headed_blocks = add_header(data_blocks, total, last_block_length)
     header_end = time.time()
     
     qr_start = time.time()
@@ -221,6 +270,7 @@ def main():
     # 打印计时结果
     print(f"\n程序运行完成")
     print(f"文件读取与分块: {read_end - read_start:.2f} 秒")
+    print(f"添加rs块: {rs_end - rs_start:.2f} 秒")
     print(f"添加块头: {header_end - header_start:.2f} 秒")
     print(f"生成二维码: {qr_end - qr_start:.2f} 秒")
     print(f"生成视频: {video_end - video_start:.2f} 秒")
