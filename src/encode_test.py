@@ -4,12 +4,15 @@ import qrcode
 import os
 import shutil
 import cv2
+import base64
+from tqdm import tqdm
 
 
 """"""
 # 参数配置
 bytes_per_frame = 1536  # 单块数据量
 
+test_mode = False
 # FLAG_START = b'S'    # 起始标志
 # FLAG_DATA = b'D'     # 数据标志
 # FLAG_END = b'E'      # 结束标志
@@ -57,7 +60,7 @@ def add_header(data_blocks):
     """
     total = len(data_blocks)
     headed_blocks = []
-    for index, block in enumerate(data_blocks):
+    for index, block in tqdm(enumerate(data_blocks), desc="添加数据块头：", total=total):
         # # 确定当前块的标志
         # if index == 0:
         #     flag = FLAG_START
@@ -76,11 +79,11 @@ def add_header(data_blocks):
 # def add_header_per_block(block, flag, index, total):
 def add_header_per_block(block, index, total):
     """
-    给每个数据块进行crc并添加块头 块构成为[标识符][块编号/总块数][CRC][数据]
+    给每个数据块进行crc并添加块头 块构成为([标识符])[块编号/总块数][CRC][数据]
 
     参数：
         block(bytes)    : 数据块
-        flag(bytes)     : 标识符
+        # flag(bytes)     : 标识符
         index(int)      : 块编号
         total(int)      : 总块数
     返回：
@@ -92,6 +95,8 @@ def add_header_per_block(block, index, total):
     # 拼接编号
     order = struct.pack(">HH", index, total)
 
+    if test_mode:
+        print(f"index is : {index}, total is : {total}, crc is : {crc}")
     return order + crc_bytes + block
 
 
@@ -114,8 +119,9 @@ def generate_qr_sequence(blocks, output_dir="frames_encode"):
     os.makedirs(output_dir, exist_ok=True)
     
     file_paths = []
+    total = len(blocks)
 
-    for i, block in enumerate(blocks):
+    for i, block in tqdm(enumerate(blocks), desc="生成二维码图片：", total=total):
         # 设置qr参数
         qr = qrcode.QRCode(
         version=40,                                 # 固定最大版本
@@ -124,7 +130,10 @@ def generate_qr_sequence(blocks, output_dir="frames_encode"):
         border=4
         )
 
-        qr.add_data(block)
+        encoded_block = base64.b64encode(block)
+        if test_mode:
+            print(f"encode_block size : {len(encoded_block)}")
+        qr.add_data(encoded_block)
         qr.make(fit=False)
 
         img = qr.make_image(fill_color="black", back_color="white")
@@ -150,6 +159,7 @@ def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 4):
     # 设置分辨率
     frame = cv2.imread(image_paths[0])
     h, w, _ = frame.shape
+    total = len(image_paths)
 
     video = cv2.VideoWriter(
         output_path, 
@@ -158,7 +168,7 @@ def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 4):
         (w, h)
         )
 
-    for image in image_paths:
+    for image in tqdm(image_paths, desc="生成视频：", total=total):
         frame = cv2.imread(image)
         for _ in range(frame_repeat):   # 重复写入
             video.write(frame)
@@ -175,15 +185,19 @@ def main():
     # headed_blocks = add_header(data_blocks)
     # image_paths = generate_qr_sequence(headed_blocks, "test/frames_encode")
     # images_to_video(image_paths, "test/output.mp4")
+    input_file_path = "test/jiheon.jpg"
+    output_file_path = "test/output.mp4"
+    frames_file_path = "test/frames_encode"
+
     # 记录程序开始时间
     start_time = time.time()
     
-    if os.path.exists("test/frames_encode"):
-        shutil.rmtree("test/frames_encode")
+    if os.path.exists(frames_file_path):
+        shutil.rmtree(frames_file_path)
     
     # 记录各阶段开始时间（可选，用于分析各步骤耗时）
     read_start = time.time()
-    data_blocks = read_and_divide("test/input.bin")
+    data_blocks = read_and_divide(input_file_path)
     read_end = time.time()
     
     header_start = time.time()
@@ -191,11 +205,11 @@ def main():
     header_end = time.time()
     
     qr_start = time.time()
-    image_paths = generate_qr_sequence(headed_blocks, "test/frames_encode")
+    image_paths = generate_qr_sequence(headed_blocks, frames_file_path)
     qr_end = time.time()
     
     video_start = time.time()
-    images_to_video(image_paths, "test/output.mp4")
+    images_to_video(image_paths, output_file_path)
     video_end = time.time()
     
     # 记录程序结束时间
@@ -206,11 +220,11 @@ def main():
     
     # 打印计时结果
     print(f"\n程序运行完成")
-    print(f"总耗时: {total_time:.2f} 秒")
     print(f"文件读取与分块: {read_end - read_start:.2f} 秒")
     print(f"添加块头: {header_end - header_start:.2f} 秒")
     print(f"生成二维码: {qr_end - qr_start:.2f} 秒")
     print(f"生成视频: {video_end - video_start:.2f} 秒")
+    print(f"总耗时: {total_time:.2f} 秒")
 
 
 if __name__ == "__main__":
