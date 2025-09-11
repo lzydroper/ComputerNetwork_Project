@@ -30,7 +30,7 @@ def decode_frames(file_path):
 
     raw_data_blocks = []
 
-    pbar = tqdm(desc="解码视频：", unit="帧")
+    pbar = tqdm(desc="解码视频", unit="帧")
 
     while True:
         ret, frame = cap.read()
@@ -85,7 +85,7 @@ def parse_blocks(raw_data_blocks):
     total_blocks = -1
     blocks_dict = {}
     rs_blocks = []
-    for raw_block in tqdm(raw_data_blocks, desc="解析数据块：", total=len(raw_data_blocks)):
+    for raw_block in tqdm(raw_data_blocks, desc="解析数据块", total=len(raw_data_blocks)):
         index, total, crc, block = parse_header(raw_block)
         # 去重
         if index in blocks_dict:
@@ -142,7 +142,7 @@ def reconstructed_file(blocks, file_name):
         return
     try:
         with open(file_name, "wb") as file:
-            for block in tqdm(blocks, desc="写入文件：", total=len(blocks)):
+            for block in tqdm(blocks, desc="写入文件", total=len(blocks)):
                 file.write(block)
     except Exception as e:
         print(f"error in reconstructed_file while writing file:{str(e)}")
@@ -168,12 +168,10 @@ def main():
     raw_data_blocks = decode_frames(input_file_path)
     decode_end = time.time()
 
-    # 2. 解析数据块
     parse_start = time.time()
     total, blocks_dict, rs_blocks = parse_blocks(raw_data_blocks)
     parse_end = time.time()
 
-    # 3. 检查数据块完整性
     check_start = time.time()
     blocks = check_blocks(blocks_dict, total)
     check_end = time.time()
@@ -185,7 +183,6 @@ def main():
     reconstruct_start = time.time()
     reconstructed_file(blocks, output_file_path)
     reconstruct_end = time.time()
-    print(f"重建文件耗时: {reconstruct_end - reconstruct_start:.4f} 秒")
 
     # 总用时
     total_time = time.time() - start_time
@@ -193,7 +190,8 @@ def main():
     print(f"解码视频帧耗时: {decode_end - decode_start:.4f} 秒")
     print(f"解析数据块耗时: {parse_end - parse_start:.4f} 秒")
     print(f"检查数据块耗时: {check_end - check_start:.4f} 秒")
-    print(f"\n总程序运行时间: {total_time:.4f} 秒")
+    print(f"重建文件耗时: {reconstruct_end - reconstruct_start:.4f} 秒")
+    print(f"总程序运行时间: {total_time:.4f} 秒")
 
 if __name__ == "__main__":
     main()

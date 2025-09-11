@@ -60,7 +60,7 @@ def add_header(data_blocks):
     """
     total = len(data_blocks)
     headed_blocks = []
-    for index, block in tqdm(enumerate(data_blocks), desc="添加数据块头：", total=total):
+    for index, block in tqdm(enumerate(data_blocks), desc="添加数据块头", total=total):
         # # 确定当前块的标志
         # if index == 0:
         #     flag = FLAG_START
@@ -121,7 +121,7 @@ def generate_qr_sequence(blocks, output_dir="frames_encode"):
     file_paths = []
     total = len(blocks)
 
-    for i, block in tqdm(enumerate(blocks), desc="生成二维码图片：", total=total):
+    for i, block in tqdm(enumerate(blocks), desc="生成二维码图片", total=total):
         # 设置qr参数
         qr = qrcode.QRCode(
         version=40,                                 # 固定最大版本
@@ -168,7 +168,7 @@ def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 4):
         (w, h)
         )
 
-    for image in tqdm(image_paths, desc="生成视频：", total=total):
+    for image in tqdm(image_paths, desc="生成视频", total=total):
         frame = cv2.imread(image)
         for _ in range(frame_repeat):   # 重复写入
             video.write(frame)
