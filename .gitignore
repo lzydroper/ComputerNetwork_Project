@@ -2,3 +2,4 @@
 */frames_encode/
 # 忽略视频文件
 *.mp4
+.idea/
