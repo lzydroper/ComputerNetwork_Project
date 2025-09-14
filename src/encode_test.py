@@ -8,15 +8,17 @@ import cv2
 import base64
 from tqdm import tqdm
 import reedsolo
+import config as cg
 
 
 """"""
+# 大致流程如下：[分组 -> 补长] -> rs -> 块头 -> [base64 -> qr] -> 视频
 # 参数配置
-bytes_per_frame = 1536  # 单块数据量
-rs_group_size = 200     # rs块分组大小
-rs_factor = 0.15        # 冗余率
-
-test_mode = False
+bytes_per_frame = cg.bytes_per_frame  # 单块数据量
+rs_group_size = cg.rs_group_size     # rs块分组大小
+rs_factor = cg.rs_factor        # 冗余率
+rs_mode = cg.rs_mode         # rs
+test_mode = cg.test_mode       # 测试模式
 # FLAG_START = b'S'    # 起始标志
 # FLAG_DATA = b'D'     # 数据标志
 # FLAG_END = b'E'      # 结束标志
@@ -44,7 +46,26 @@ def read_and_divide(file_path):
                 if not block:  # 读取到文件末尾
                     break
                 raw_data_blocks.append(block)
-                
+
+            # 末块补长
+            last_block = raw_data_blocks[-1]
+            last_block_length = len(last_block)
+            # 处理末块，可能出现大小刚好是 bytes_per_frame - 1 的情况，但是不管了，直接报错
+            if last_block_length != bytes_per_frame:
+                if last_block_length == bytes_per_frame - 1:
+                    raise ValueError("the last_block_length is bytes_per_frame - 1")
+                # 补齐长度
+                padding_length = bytes_per_frame - last_block_length
+                if padding_length > 0:
+                    last_block = last_block + b"z" * padding_length
+                    raw_data_blocks[-1] = last_block
+                # 写入长度信息
+                length_bytes = struct.pack(">H", last_block_length)
+                last_block = last_block[:-2] + length_bytes
+                raw_data_blocks[-1] = last_block
+                if test_mode:
+                    print(f"pad length :{last_block_length}")
+
         return raw_data_blocks, len(raw_data_blocks)
         
     except FileNotFoundError:
@@ -53,7 +74,7 @@ def read_and_divide(file_path):
         raise IOError(f"io error in read and divide: {str(e)}")
 
 
-def add_header(data_blocks, total, last_block_length):
+def add_header(data_blocks, total):
     """
     给所有数据块添加块头 
         去除 因为可以用超过index来表示冗余 编号表示起始和终止->定义标识符为bytes类型 分为起始、数据、终止、冗余
@@ -65,14 +86,14 @@ def add_header(data_blocks, total, last_block_length):
     """
     headed_blocks = []
     for index, block in tqdm(enumerate(data_blocks), desc="添加数据块头", total=len(data_blocks)):
-        headed_block = add_header_per_block(block, index, total, last_block_length)
+        headed_block = add_header_per_block(block, index, total)
         headed_blocks.append(headed_block)
 
     return headed_blocks
 
 
 # def add_header_per_block(block, flag, index, total):
-def add_header_per_block(block, index, total, last_block_length):
+def add_header_per_block(block, index, total):
     """
     给每个数据块进行crc并添加块头 块构成为([标识符])[块编号/总块数][CRC][数据]
 
@@ -89,17 +110,13 @@ def add_header_per_block(block, index, total, last_block_length):
     crc_bytes = struct.pack(">I", crc)
     # 拼接编号
     order = struct.pack(">HH", index, total)
-    # 处理末块
-    if index == total - 1:
-        length_bytes = struct.pack(">H", last_block_length)
-        block = block[:-2] + length_bytes
 
     if test_mode:
         print(f"index is : {index}, total is : {total}, crc is : {crc}")
     return order + crc_bytes + block
 
 
-def generate_rs_per_group(group_blocks):
+def encode_rs_per_group(group_blocks):
     """
     对单组数据块进行垂直rs编码生成冗余块
 
@@ -127,33 +144,26 @@ def generate_rs_per_group(group_blocks):
     return [bytes(block) for block in rs_blocks]
 
 
-def generate_rs(raw_data_blocks):
+def encode_rs(raw_data_blocks):
     """
-    生成并添加全局冗余块 首先记录最后一块字节长度并补齐同一长度 然后再rs
+    ## 生成并添加全局冗余块 首先记录最后一块字节长度并补齐同一长度 然后再rs
 
     参数：
         raw_data_blocks[bytes]: 原始数据块
     返回：
-        data_blocks[bytes]: 添加了rs冗余块的数据块
-        last_block_length(int): 末块长度
+        blocks[bytes]: 添加了rs冗余块的数据块
     """
-    last_block = raw_data_blocks[-1]
-    last_block_length = len(last_block)
-    # 补齐长度
-    padding_length = bytes_per_frame - last_block_length
-    if padding_length > 0:
-        last_block = last_block + b"z" * padding_length
-        raw_data_blocks[-1] = last_block
     # 添加rs块
+    rs_blocks = []
     # 按组切分
     for i in tqdm(range(0, len(raw_data_blocks), rs_group_size), 
                   desc="按组添加rs块", 
                   total=math.ceil(len(raw_data_blocks) / rs_group_size)):
         group_blocks = raw_data_blocks[i : i + rs_group_size]
-        rs_blocks_per_group = generate_rs_per_group(group_blocks)
-        raw_data_blocks.extend(rs_blocks_per_group)
+        rs_blocks_per_group = encode_rs_per_group(group_blocks)
+        rs_blocks.extend(rs_blocks_per_group)
     
-    return raw_data_blocks, last_block_length
+    return raw_data_blocks + rs_blocks
 
 
 def generate_qr_sequence(blocks, output_dir="frames_encode"):
@@ -230,7 +240,7 @@ def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 4):
 def main():
     import time
 
-    input_file_path = "test/jiheon.jpg"
+    input_file_path = "test/xmu.txt"
     output_file_path = "test/output.mp4"
     frames_file_path = "test/frames_encode"
 
@@ -246,11 +256,11 @@ def main():
     read_end = time.time()
 
     rs_start = time.time()
-    data_blocks, last_block_length = generate_rs(raw_data_blocks)
+    blocks = encode_rs(raw_data_blocks)
     rs_end = time.time()
     
     header_start = time.time()
-    headed_blocks = add_header(data_blocks, total, last_block_length)
+    headed_blocks = add_header(blocks, total)
     header_end = time.time()
     
     qr_start = time.time()

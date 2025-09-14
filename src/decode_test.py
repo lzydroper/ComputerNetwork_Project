@@ -5,12 +5,19 @@ from pyzbar.pyzbar import decode, ZBarSymbol
 import os
 import base64
 from tqdm import tqdm
+import reedsolo
+import config as cg
+import math
 
 
 """"""
+# 大致流程如下：[写入 <- 还原] <- rs <- 块头 <- [base64 <- qr] <- 视频
 # 参数配置
-
-test_mode = False
+bytes_per_frame = cg.bytes_per_frame  # 单块数据量
+rs_group_size = cg.rs_group_size     # rs块分组大小
+rs_factor = cg.rs_factor        # 冗余率
+rs_mode = cg.rs_mode         # rs
+test_mode = cg.test_mode       # 测试模式
 """"""
 
 
@@ -48,6 +55,9 @@ def decode_frames(file_path):
 
         pbar.update()
 
+    if not raw_data_blocks:
+        raise RuntimeError("decode frame error: cannot read any qrcode")
+
     return raw_data_blocks
 
 
@@ -61,72 +71,136 @@ def parse_header(raw_block):
         index(int): 块编号
         total(int): 总块数
         crc(int): crc
-        block(bytes): 块数据
+        parsed_block(bytes): 块数据
     """
     index, total = struct.unpack(">HH", raw_block[0:4])
     crc = struct.unpack(">I", raw_block[4:8])[0]
-    block = raw_block[8:]
+    parsed_block = raw_block[8:]
+
     if test_mode:
         print(f"index is : {index}, total is : {total}, crc is : {crc}")
-    return index, total, crc, block
+    return index, total, crc, parsed_block
 
 
-def parse_blocks(raw_data_blocks):
+def parse_blocks(raw_blocks):
     """
-    解析块并验证crc 按编号保留首个crc通过的块 分离出rs恢复块(即index从total开始的所有块)
+    解析块并验证crc 按编号保留首个crc通过的块
 
     参数：
         raw_blocks[bytes]: 待解析的块
     返回：
-        total_blocks(int): 总块数
-        blocks_dict: 已去重并校验过crc的块字典
-        rs_blocks[bytes]: 冗余块
+        total_data_blocks(int): 总数据块数
+        total_rs_blocks(int): 总rs块数
+        parsed_blocks[bytes or None]: 已去重并校验过crc的块表 若缺失则为None 0-total为数据块 total以后为rs块
     """
-    total_blocks = -1
-    blocks_dict = {}
-    rs_blocks = []
-    for raw_block in tqdm(raw_data_blocks, desc="解析数据块", total=len(raw_data_blocks)):
-        index, total, crc, block = parse_header(raw_block)
+    total_data_blocks = -1
+    total_rs_blocks = -1
+    parsed_blocks = []
+    for raw_block in tqdm(raw_blocks, desc="解析块头", total=len(raw_blocks)):
+        index, total, crc, parsed_block = parse_header(raw_block)
         # 去重
-        if index in blocks_dict:
+        if total_data_blocks != -1 and parsed_blocks[index] is not None:
             continue
         # 校验
-        if zlib.crc32(block) & 0xffffffff != crc:
+        if zlib.crc32(parsed_block) & 0xffffffff != crc:
             continue
         # 校验通过后初始化总块数
-        if total_blocks == -1:
-            total_blocks = total
-        # 分离冗余块和数据块
-        if index >= total:
-            rs_blocks.append((index, block))  # 保留编号和数据
-        else:
-            blocks_dict[index] = block
+        if total_data_blocks == -1:
+            total_data_blocks = total
+            total_rs_blocks = math.ceil(total_data_blocks * rs_factor)
+            parsed_blocks = [None] * (total_data_blocks + total_rs_blocks)
 
-    return total_blocks, blocks_dict, rs_blocks
+        parsed_blocks[index] = parsed_block
+
+    return total_data_blocks, total_rs_blocks, parsed_blocks
 
 
-def check_blocks(blocks_dict, total):
+def check_blocks(parsed_blocks, total_data_blocks, total_rs_blocks):
     """
     遍历查询缺失块，若可能则进行恢复，若无法恢复，返回缺失块数量或索引列表
     
     参数：
-        blocks_dict: 已去重并校验过crc的块字典
+        parsed_blocks[bytes or None]: 已去重并校验过crc的块表 若缺失则为None 0-total为数据块 total以后为rs块
+        total_data_blocks(int): 总数据块数
+        total_rs_blocks(int): 总rs块数
     返回：
-        blocks[bytes] or None: 完整数据块表 缺失返回None
+        data_blocks[bytes] or None: 完整数据块表 缺失返回None
     """
-    missing = [i for i in range(total) if i not in blocks_dict]
-
-    if missing:
-        # 输出缺失块信息
-        print(f"检测到缺失块，共 {len(missing)} 个")
-        print(f"缺失块索引：{missing}")
-        return None  # 有缺失时返回None
+    parsed_data_blocks = parsed_blocks[:total_data_blocks]
+    missing = [i for i, block in enumerate(parsed_data_blocks) if block is None]
+    if len(missing) > 0:
+        print(f"need blocks :{total_data_blocks}, but find missing block :{len(missing)}")
+        print(f"missing block index is :{missing}")
+        return decode_rs(parsed_blocks, total_data_blocks, total_rs_blocks)
     else:
-        return [blocks_dict[i] for i in range(total)]
+        return parsed_blocks[:total_data_blocks]
 
 
-def restore_global_rs():
-    """用冗余块进行恢复"""
+def decode_rs_per_group(group_blocks, data_blocks_num, rs_blocks_num):
+    """
+    对单子块进行rs解码还原
+
+    参数：
+        group_blocks[bytes or None]: 该组块 前半部分为数据块 后半部分为rs块
+        data_blocks_num(int): 原始数据块数目
+        rs_blocks_num(int): 冗余块数目
+    返回：
+        restored_grou[bytes]: 还原的该组原始数据
+    """
+    coder = reedsolo.RSCodec(rs_blocks_num)
+
+    erase_pos = [i for i, block in enumerate(group_blocks) if block is None]
+
+    repaired_columns = []
+    for i in range(bytes_per_frame):
+        column_data = bytearray([block[i] if block is not None else 0 for block in group_blocks])
+
+        try:
+            decoded_column, _, _ = coder.decode(column_data, erase_pos=erase_pos)
+            repaired_columns.append(decoded_column[:data_blocks_num])
+        except reedsolo.ReedSolomonError as e:
+            raise RuntimeError(f"列 {i} 解码失败: {e}")
+    # 利用zip将列数据转置为行数据，再转换为bytes
+    return [bytes(bytearray(col)) for col in zip(*repaired_columns)]
+
+
+def decode_rs(parsed_blocks, total_data_blocks, total_rs_blocks):
+    """
+    用冗余块进行恢复，先分组，再判断每组的可恢复程度，若都能恢复再进行恢复，否则直接报错吧
+
+    参数：
+        parsed_blocks[bytes or None]: 已去重并校验过crc的块表 若缺失则为None 0-total为数据块 total以后为rs块
+        total_data_blocks(int): 总数据块数
+        total_rs_blocks(int): 总rs块数
+    返回：
+        data_blocks[bytes]: 没报错的话会直接返回还原的数据块
+    """
+    # 总体计算有效块数目是否足够
+    if total_rs_blocks < parsed_blocks.count(None):
+        raise RuntimeError("restore rs: data block is not enough, cannot restore")
+    data_blocks = []
+    # 分组处理
+    rs_group_blocks_num = math.ceil(rs_group_size * rs_factor)
+    for i in tqdm(range(0, total_data_blocks, rs_group_size), 
+                  desc="按组添加rs块", 
+                  total=math.ceil(total_data_blocks / rs_group_size)):
+        r = min(i + rs_group_size, total_data_blocks)
+        group_data_blocks = parsed_blocks[i : r]
+        # 检验该组是否需要还原
+        if group_data_blocks.count(None) == 0:
+            data_blocks.extend(group_data_blocks)
+            continue
+        j = i + total_data_blocks
+        group_rs_blocks = parsed_blocks[j : j + rs_group_blocks_num]
+        group_blocks = group_data_blocks + group_rs_blocks
+        # 检验单组有效块数目是否足够
+        if len(group_rs_blocks) < group_blocks.count(None):
+            raise RuntimeError("restore rs: data block is not enough, cannot restore")
+        # 还原
+        restored_group = decode_rs_per_group(group_blocks, len(group_data_blocks), len(group_rs_blocks))
+        data_blocks.extend(restored_group)
+
+    return data_blocks
 
 
 def reconstructed_file(blocks, file_name):
@@ -138,8 +212,16 @@ def reconstructed_file(blocks, file_name):
         file_name(str): 输出文件名（含后缀）
     """
     if blocks is None or not blocks:
-        print("error in reconstructed_file by blocks")
-        return
+        raise RuntimeError("error in reconstructed_file by blocks")
+    
+    # 处理末块
+    last_block = blocks[-1]
+    last_block_length = struct.unpack(">H", last_block[-2:])[0]
+    last_block = last_block[:last_block_length]
+    blocks[-1] = last_block
+    if test_mode:
+        print(f"pad length :{last_block_length}")
+
     try:
         with open(file_name, "wb") as file:
             for block in tqdm(blocks, desc="写入文件", total=len(blocks)):
@@ -151,29 +233,26 @@ def reconstructed_file(blocks, file_name):
 def main():
     import time
     input_file_path = "test/output.mp4"
-    output_file_path = "test/jiheon_decoded.jpg"
+    output_file_path = "test/decoded_xmu.txt"
     start_time = time.time()
 
     if os.path.exists(output_file_path):
         os.remove(output_file_path)
-
-    # raw_data_blocks = decode_frames("test/output.mp4")
-    # total, blocks_dict, rs_blocks = parse_blocks(raw_data_blocks)
-    # blocks = check_blocks(blocks_dict, total)
-    # if blocks is None:
-    #     return
-    # reconstructed_file(blocks, "test/output.bin")
 
     decode_start = time.time()
     raw_data_blocks = decode_frames(input_file_path)
     decode_end = time.time()
 
     parse_start = time.time()
-    total, blocks_dict, rs_blocks = parse_blocks(raw_data_blocks)
+    total_data_blocks, total_rs_blocks, parsed_blocks = parse_blocks(raw_data_blocks)
     parse_end = time.time()
 
+    # 模拟破坏，把第一块置为None
+    parsed_blocks[0] = None
+    # print(f"parsed_blocks length is :{len(parsed_blocks)}")
+
     check_start = time.time()
-    blocks = check_blocks(blocks_dict, total)
+    blocks = check_blocks(parsed_blocks, total_data_blocks, total_rs_blocks)
     check_end = time.time()
 
     if blocks is None:
