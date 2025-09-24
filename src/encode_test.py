@@ -85,7 +85,7 @@ def add_header(data_blocks, total):
         list[bytes]: 含块头的数据块
     """
     headed_blocks = []
-    for index, block in tqdm(enumerate(data_blocks), desc="添加数据块头", total=len(data_blocks)):
+    for index, block in tqdm(enumerate(data_blocks), desc="添加块头", total=len(data_blocks)):
         headed_block = add_header_per_block(block, index, total)
         headed_blocks.append(headed_block)
 
@@ -95,11 +95,10 @@ def add_header(data_blocks, total):
 # def add_header_per_block(block, flag, index, total):
 def add_header_per_block(block, index, total):
     """
-    给每个数据块进行crc并添加块头 块构成为([标识符])[块编号/总块数][CRC][数据]
+    给每个数据块进行crc并添加块头 块构成为[块编号/总块数][CRC][数据]
 
     参数：
         block(bytes)    : 数据块
-        # flag(bytes)     : 标识符
         index(int)      : 块编号
         total(int)      : 总块数
     返回：
@@ -157,7 +156,7 @@ def encode_rs(raw_data_blocks):
     rs_blocks = []
     # 按组切分
     for i in tqdm(range(0, len(raw_data_blocks), rs_group_size), 
-                  desc="按组添加rs块", 
+                  desc="添加rs块", 
                   total=math.ceil(len(raw_data_blocks) / rs_group_size)):
         group_blocks = raw_data_blocks[i : i + rs_group_size]
         rs_blocks_per_group = encode_rs_per_group(group_blocks)
@@ -182,12 +181,11 @@ def generate_qr_sequence(blocks, output_dir="frames_encode"):
     file_paths = []
     total = len(blocks)
 
-    for i, block in tqdm(enumerate(blocks), desc="生成二维码图片", total=total):
+    for i, block in tqdm(enumerate(blocks), desc="生成图片", total=total):
         # 设置qr参数
         qr = qrcode.QRCode(
-        version=40,                                 # 固定最大版本
         error_correction=qrcode.ERROR_CORRECT_M,    # 15% 纠错
-        box_size=10,
+        box_size=5,
         border=4
         )
 
@@ -202,6 +200,9 @@ def generate_qr_sequence(blocks, output_dir="frames_encode"):
         file_path = os.path.join(output_dir, f"frame_{i:05d}.png")
         img.save(file_path)
         file_paths.append(file_path)
+        if test_mode:
+            print(f"len is {len(encoded_block)}")
+            print(f"qr version is {qr.version}")
 
     return file_paths
 
@@ -235,6 +236,21 @@ def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 4):
             video.write(frame)
 
     video.release()
+
+
+def cal_speed(file_path, image_paths, fps = 60, frame_repeat = 4):
+    """
+    计算编码速度
+
+    :param file_path: 原始文件路径
+    :param image_path: 二维码图片路径
+    :param fps: 视频帧率
+    :param frame_repeat: 每个二维码图片重复次数
+    :return: 编码速度kbps
+    """
+    file_size = os.path.getsize(file_path) * 8 / 1000   # kb
+    duration = len(image_paths) * frame_repeat / fps
+    return file_size / duration
 
 
 def main():
@@ -285,6 +301,7 @@ def main():
     print(f"生成二维码: {qr_end - qr_start:.2f} 秒")
     print(f"生成视频: {video_end - video_start:.2f} 秒")
     print(f"总耗时: {total_time:.2f} 秒")
+    print(f"编码速度: {cal_speed(input_file_path, image_paths):.2f} kbps")
 
 
 if __name__ == "__main__":

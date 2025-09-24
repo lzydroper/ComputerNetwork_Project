@@ -8,6 +8,7 @@ from tqdm import tqdm
 import reedsolo
 import config as cg
 import math
+import numpy as np
 
 
 """"""
@@ -21,7 +22,7 @@ test_mode = cg.test_mode       # 测试模式
 """"""
 
 
-def decode_frames(file_path):
+def decode_frames(file_path, mode=0):
     """
     读取视频每一帧并直接解码保存为raw_data_blocks
 
@@ -34,27 +35,93 @@ def decode_frames(file_path):
     if not cap.isOpened():
         print("cannot open a video file")
         exit()
-
+    
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     raw_data_blocks = []
 
-    pbar = tqdm(desc="解码视频", unit="帧")
-
-    while True:
-        ret, frame = cap.read()
+    if mode == 0:
+        # pbar = tqdm(desc="解码视频", unit="帧")
+        for _ in tqdm(range(total_frames), desc="解码视频"):
+        # while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            # 灰度化
+            # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # 二值化
+            # _, frame = cv2.threshold(frame, 50, 205, cv2.THRESH_BINARY)
+            # 读取二维数据
+            results = decode(frame, symbols=[ZBarSymbol.QRCODE])
+            if results:
+                decoded_block = base64.b64decode(results[0].data)
+                raw_data_blocks.append(decoded_block)
+            # pbar.update()
+    elif mode == 1:
+        ret, prev_frame = cap.read()
         if not ret:
-            break
-        # 灰度化
-        # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        # 二值化
-        # _, frame = cv2.threshold(frame, 50, 205, cv2.THRESH_BINARY)
-        # 读取二维数据
-        results = decode(frame, symbols=[ZBarSymbol.QRCODE])
+            print("Error: Cannot read the first frame.")
+            exit()
+
+        pbar = tqdm(total=total_frames, desc="解码视频")
+
+        # 首次解码第一帧
+        results = decode(prev_frame, symbols=[ZBarSymbol.QRCODE])
         if results:
             decoded_block = base64.b64decode(results[0].data)
             raw_data_blocks.append(decoded_block)
+        pbar.update(1)
+        
+        prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
 
-        pbar.update()
+        while cap.isOpened():
+            ret, current_frame = cap.read()
+            if not ret:
+                break
+            current_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
+            # 计算前后两帧的差异
+            diff = cv2.absdiff(prev_gray, current_gray)
+            non_zero_count = np.count_nonzero(diff)
+            # 如果差异足够大，则认为是新的一帧，进行解码
+            if non_zero_count > 1000:
+                results = decode(current_frame, symbols=[ZBarSymbol.QRCODE])
+                if results:
+                    decoded_block = base64.b64decode(results[0].data)
+                    raw_data_blocks.append(decoded_block)
+            
+            prev_gray = current_gray
+            pbar.update(1)
+        pbar.close()
+    elif mode == 2:
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_skip = 1
+        if round(fps) <= 35:
+            frame_skip = 2
+        elif round(fps) <= 65:
+            frame_skip = 4
+        print(f"fps is : {fps}, frame_skip is : {frame_skip}")
+        for frame_num in tqdm(range(0, total_frames, frame_skip), desc="解码视频"):
+            # decoded_successfully = False
+            for i in range(2): # 尝试当前帧和下一帧
+                # 防止尝试次数超出重复周期或视频总长
+                if i >= frame_skip or frame_num + i >= total_frames:
+                    break
+                    
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num + i)
+                ret, frame = cap.read()
+                if not ret:
+                    continue
 
+                results = decode(frame, symbols=[ZBarSymbol.QRCODE])
+                if results:
+                    decoded_block = base64.b64decode(results[0].data)
+                    raw_data_blocks.append(decoded_block)
+                    # decoded_successfully = True
+                    break
+            
+            # if not decoded_successfully:
+            #     print(f"警告: 在帧 {frame_num} 附近的数据块可能解码失败")
+    
+    cap.release()
     if not raw_data_blocks:
         raise RuntimeError("decode frame error: cannot read any qrcode")
 
@@ -177,12 +244,13 @@ def decode_rs(parsed_blocks, total_data_blocks, total_rs_blocks):
     """
     # 总体计算有效块数目是否足够
     if total_rs_blocks < parsed_blocks.count(None):
-        raise RuntimeError("restore rs: data block is not enough, cannot restore")
+        print("restore rs: data block is not enough, cannot restore")
+        exit(1)
     data_blocks = []
     # 分组处理
     rs_group_blocks_num = math.ceil(rs_group_size * rs_factor)
     for i in tqdm(range(0, total_data_blocks, rs_group_size), 
-                  desc="按组添加rs块", 
+                  desc="翻译rs块", 
                   total=math.ceil(total_data_blocks / rs_group_size)):
         r = min(i + rs_group_size, total_data_blocks)
         group_data_blocks = parsed_blocks[i : r]
@@ -232,7 +300,7 @@ def reconstructed_file(blocks, file_name):
 
 def main():
     import time
-    input_file_path = "test/output.mp4"
+    input_file_path = "test/record.mp4"
     output_file_path = "test/decoded_xmu.txt"
     start_time = time.time()
 
@@ -240,7 +308,7 @@ def main():
         os.remove(output_file_path)
 
     decode_start = time.time()
-    raw_data_blocks = decode_frames(input_file_path)
+    raw_data_blocks = decode_frames(input_file_path, mode=2)
     decode_end = time.time()
 
     parse_start = time.time()
@@ -248,7 +316,7 @@ def main():
     parse_end = time.time()
 
     # 模拟破坏，把第一块置为None
-    parsed_blocks[0] = None
+    # parsed_blocks[0] = None
     # print(f"parsed_blocks length is :{len(parsed_blocks)}")
 
     check_start = time.time()
