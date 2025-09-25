@@ -282,6 +282,7 @@ def main():
     header_end = time.time()
     
     qr_start = time.time()
+    os.makedirs(frames_file_path, exist_ok=True)
     image_paths = generate_qr_sequence(headed_blocks, frames_file_path)
     qr_end = time.time()
     
