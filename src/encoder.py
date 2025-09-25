@@ -14,10 +14,10 @@ import config as cg
 """"""
 # 大致流程如下：[分组 -> 补长] -> rs -> 块头 -> [base64 -> qr] -> 视频
 # 参数配置
-bytes_per_frame = cg.bytes_per_frame  # 单块数据量
-rs_group_size = cg.rs_group_size     # rs块分组大小
-rs_factor = cg.rs_factor        # 冗余率
-rs_mode = cg.rs_mode         # rs
+# bytes_per_frame = cg.bytes_per_frame  # 单块数据量
+# rs_group_size = cg.rs_group_size     # rs块分组大小
+# rs_factor = cg.rs_factor        # 冗余率
+# rs_mode = cg.rs_mode         # rs
 test_mode = cg.test_mode       # 测试模式
 # FLAG_START = b'S'    # 起始标志
 # FLAG_DATA = b'D'     # 数据标志
@@ -26,7 +26,7 @@ test_mode = cg.test_mode       # 测试模式
 """"""
 
 
-def read_and_divide(file_path):
+def read_and_divide(file_path, bytes_per_frame = cg.bytes_per_frame, rs_mode=cg.rs_mode):
     """
     读取一个二进制文件，并切分为数据块
     
@@ -47,24 +47,26 @@ def read_and_divide(file_path):
                     break
                 raw_data_blocks.append(block)
 
-            # 末块补长
-            last_block = raw_data_blocks[-1]
-            last_block_length = len(last_block)
-            # 处理末块，可能出现大小刚好是 bytes_per_frame - 1 的情况，但是不管了，直接报错
-            if last_block_length != bytes_per_frame:
-                if last_block_length == bytes_per_frame - 1:
-                    raise ValueError("the last_block_length is bytes_per_frame - 1")
-                # 补齐长度
-                padding_length = bytes_per_frame - last_block_length
-                if padding_length > 0:
-                    last_block = last_block + b"z" * padding_length
+            # 只有rs模式才需要补长
+            if rs_mode:
+                # 末块补长
+                last_block = raw_data_blocks[-1]
+                last_block_length = len(last_block)
+                # 处理末块，可能出现大小刚好是 bytes_per_frame - 1 的情况，但是不管了，直接报错
+                if last_block_length != bytes_per_frame:
+                    if last_block_length == bytes_per_frame - 1:
+                        raise ValueError("the last_block_length is bytes_per_frame - 1")
+                    # 补齐长度
+                    padding_length = bytes_per_frame - last_block_length
+                    if padding_length > 0:
+                        last_block = last_block + b"z" * padding_length
+                        raw_data_blocks[-1] = last_block
+                    # 写入长度信息
+                    length_bytes = struct.pack(">H", last_block_length)
+                    last_block = last_block[:-2] + length_bytes
                     raw_data_blocks[-1] = last_block
-                # 写入长度信息
-                length_bytes = struct.pack(">H", last_block_length)
-                last_block = last_block[:-2] + length_bytes
-                raw_data_blocks[-1] = last_block
-                if test_mode:
-                    print(f"pad length :{last_block_length}")
+                    if test_mode:
+                        print(f"pad length :{last_block_length}")
 
         return raw_data_blocks, len(raw_data_blocks)
         
@@ -115,7 +117,7 @@ def add_header_per_block(block, index, total):
     return order + crc_bytes + block
 
 
-def encode_rs_per_group(group_blocks):
+def encode_rs_per_group(group_blocks, bytes_per_frame = cg.bytes_per_frame, rs_factor=cg.rs_factor):
     """
     对单组数据块进行垂直rs编码生成冗余块
 
@@ -143,9 +145,9 @@ def encode_rs_per_group(group_blocks):
     return [bytes(block) for block in rs_blocks]
 
 
-def encode_rs(raw_data_blocks):
+def encode_rs(raw_data_blocks, rs_group_size = cg.rs_group_size):
     """
-    ## 生成并添加全局冗余块 首先记录最后一块字节长度并补齐同一长度 然后再rs
+    ### 生成并添加全局冗余块 首先记录最后一块字节长度并补齐同一长度 然后再rs
 
     参数：
         raw_data_blocks[bytes]: 原始数据块
@@ -175,8 +177,8 @@ def generate_qr_sequence(blocks, output_dir="frames_encode"):
     返回：
         list[str]: 每个二维码图片的文件路径
     """
-    # 创建输出目录
-    os.makedirs(output_dir, exist_ok=True)
+    # # 创建输出目录
+    # os.makedirs(output_dir, exist_ok=True)
     
     file_paths = []
     total = len(blocks)
