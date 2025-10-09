@@ -34,7 +34,7 @@ def read_and_divide(input_file_path, output_dir):
     file_paths = []
     cap = cv2.VideoCapture(input_file_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    pbar = tqdm(total=total_frames, desc="读取视频帧")
+    pbar = tqdm(total=total_frames, desc="读视频帧")
     for frame_index in range(total_frames):
         ret, frame = cap.read()
         if not ret:
@@ -60,6 +60,8 @@ def decode_frames(file_paths, workspace, rs_factor=cg.rs_factor, debug=False):
     total_rs_blocks = -1
     parsed_blocks = []
     qr_decoder = qr()
+    import logging
+    logging.basicConfig(filename=f"{workspace}/debug_decoding.log", level=logging.DEBUG, format='%(message)s')
     for frame_index in tqdm(range(len(file_paths)), desc="解二维码"):
         try:
             data, index, total = qr_decoder.decode(file_paths[frame_index], workspace, debug)
@@ -71,7 +73,10 @@ def decode_frames(file_paths, workspace, rs_factor=cg.rs_factor, debug=False):
             if parsed_blocks[index] is not None:
                 continue
             parsed_blocks[index] = data
-        except Exception:
+        except Exception as e:
+            if debug:
+                log_msg = f"{frame_index:06d} fail for reason: {e}"
+                logging.debug(log_msg)
             continue
     return total_data_blocks, total_rs_blocks, parsed_blocks
 
@@ -140,7 +145,7 @@ def decode_rs(parsed_blocks, total_data_blocks, total_rs_blocks, rs_group_size=c
     """
     # 总体计算有效块数目是否足够
     if total_rs_blocks < parsed_blocks.count(None):
-        print("restore rs: data block is not enough, cannot restore")
+        print(f"restore rs: data block is not enough, cannot restore, still need {parsed_blocks.count(None) - total_rs_blocks}")
         exit(1)
     data_blocks = []
     # 分组处理

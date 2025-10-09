@@ -95,7 +95,11 @@ def decode(args):
     if args.one:
         import myqr
         qr = myqr.qr()
-        qr.decode(file_path, workspace, debug=True)
+        try:
+            qr.decode(file_path, workspace, debug=True)
+        except Exception as e:
+            print(f"error: {e}")
+            exit(1)
     else:
         if args.t:
             start_time = time.time()

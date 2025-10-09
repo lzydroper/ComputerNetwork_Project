@@ -324,6 +324,7 @@ class qr():
         ])
         matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
         warped = cv2.warpPerspective(image, matrix, (target_w, target_h))
+        _, warped = cv2.threshold(warped, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         # debug_img = cv2.cvtColor(warped, cv2.COLOR_GRAY2BGR)
         # for center in dst_pts:
         #     cv2.circle(debug_img, (int(center[0]), int(center[1])), 10, (0,0,255), 2)
@@ -375,7 +376,7 @@ class qr():
                 avg_val = np.mean(roi)
                 
                 # 低于阈值的是黑色 (1)，否则是白色 (0)
-                grid[y, x] = self.BLACK if avg_val < 128 else self.WHITE
+                grid[y, x] = self.BLACK if avg_val > 128 else self.WHITE
                 
         return grid, warped
     
@@ -448,18 +449,17 @@ class qr():
         :return: 一个元组 (data, index, total)，其中 data 是原始的 bytes 数据
         """
         import os
-        # print("Exists:", os.path.exists(image_path))
         frame_index = os.path.basename(image_path).split("_")[1].split(".")[0]
         # 1. 加载并预处理图像
         image = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
-        # image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         if image is None:
             raise FileNotFoundError(f"Cannot load image from {image_path}")
         blurred = cv2.GaussianBlur(image, (5, 5), 0)
         if debug:
             cv2.imwrite(f"{workspace}/debug_{frame_index}_1_blurred.png", blurred)
         # 2. 二值化图像，使其只有纯黑和纯白，便于轮廓检测
-        _, binary_image = cv2.threshold(blurred, 110, 255, cv2.THRESH_BINARY)
+        binary_image = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 5)
+        # _, binary_image = cv2.threshold(blurred, 110, 255, cv2.THRESH_BINARY)
         if debug:
             cv2.imwrite(f"{workspace}/debug_{frame_index}_2_binary.png", binary_image)
         # 3. 形态学操作清理噪点 (非常重要!)
@@ -504,12 +504,16 @@ class qr():
                 debug_fail_img = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
                 cv2.drawContours(debug_fail_img, finder_candidates, -1, (0, 255, 0), 3)
                 cv2.imwrite(f"{workspace}/debug_{frame_index}_4_finders_FAILED_candidates.png", debug_fail_img)
+                if len(finder_candidates) > 0:
+                    raise RuntimeError(f"finder detection failed, only found {len(finder_candidates)} candidates")
+                else:
+                    raise RuntimeError(f"it may be an empty frame.")
                 # print("已生成 debug_4_finders_FAILED_candidates.png 以显示找到的候选轮廓。")
             # --- 调试代码结束 ---
             return # 提前退出函数
         # 3. 图像校正并采样网格数据
         # print("Step 2: Warping image and sampling grid...")
-        grid, warped = self._warp_and_sample_grid(cleaned, finder_centers)
+        grid, warped = self._warp_and_sample_grid(blurred, finder_centers)
         if debug:
             cv2.imwrite(f"{workspace}/debug_{frame_index}_5_warped.png", warped)
         if debug:
@@ -532,9 +536,13 @@ class qr():
         data, error_blocks, corre_blocks = self._decode_rs(data_bits)
         if error_blocks > 0:
             raise RuntimeError(f"Reed-Solomon decoding failed: {error_blocks} errors corrected.")
-        # print(f"[Decoder-RS] Decoding finished. Total blocks: {self.BLOCK}, \
-        #       Failed blocks: {error_blocks} ({(error_blocks/self.BLOCK*100):.2f}%)\
-        #       Corrected blocks: {corre_blocks} ({(corre_blocks/self.BLOCK*100):.2f}%)")
+        if debug:
+            import logging
+            logging.basicConfig(filename=f"{workspace}/debug_decoding.log", level=logging.DEBUG, format='%(message)s')
+            log_msg = f"{frame_index} whitch index is {index} Total blocks: {self.BLOCK}, \
+              Failed blocks: {error_blocks} ({(error_blocks/self.BLOCK*100):.2f}%)\
+              Corrected blocks: {corre_blocks} ({(corre_blocks/self.BLOCK*100):.2f}%)"
+            logging.debug(log_msg)
         
         return data, index, total
     
