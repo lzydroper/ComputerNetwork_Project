@@ -1,14 +1,15 @@
 import math
 import zlib
 import struct
-import qrcode
+# import qrcode
 import os
-import shutil
+import numpy as np
 import cv2
-import base64
+# import base64
 from tqdm import tqdm
 import reedsolo
 import config as cg
+from myqr import qr
 
 
 """"""
@@ -65,56 +66,14 @@ def read_and_divide(file_path, bytes_per_frame = cg.bytes_per_frame, rs_mode=cg.
                     length_bytes = struct.pack(">H", last_block_length)
                     last_block = last_block[:-2] + length_bytes
                     raw_data_blocks[-1] = last_block
-                    if test_mode:
-                        print(f"pad length :{last_block_length}")
-
+                    # print(f"pad length :{last_block_length}")
+        # print(f"len(raw_data_blocks) is :{len(raw_data_blocks)}")
         return raw_data_blocks, len(raw_data_blocks)
         
     except FileNotFoundError:
         raise FileNotFoundError(f"file not found in read and divide: {file_path}")
     except IOError as e:
         raise IOError(f"io error in read and divide: {str(e)}")
-
-
-def add_header(data_blocks, total):
-    """
-    给所有数据块添加块头 
-        去除 因为可以用超过index来表示冗余 编号表示起始和终止->定义标识符为bytes类型 分为起始、数据、终止、冗余
-    
-    参数：
-        data_blocks: 原始bytes数据块
-    返回：
-        list[bytes]: 含块头的数据块
-    """
-    headed_blocks = []
-    for index, block in tqdm(enumerate(data_blocks), desc="添加块头", total=len(data_blocks)):
-        headed_block = add_header_per_block(block, index, total)
-        headed_blocks.append(headed_block)
-
-    return headed_blocks
-
-
-# def add_header_per_block(block, flag, index, total):
-def add_header_per_block(block, index, total):
-    """
-    给每个数据块进行crc并添加块头 块构成为[块编号/总块数][CRC][数据]
-
-    参数：
-        block(bytes)    : 数据块
-        index(int)      : 块编号
-        total(int)      : 总块数
-    返回：
-        bytes: 含块头的数据块
-    """
-    # 计算crc
-    crc = zlib.crc32(block) & 0xffffffff
-    crc_bytes = struct.pack(">I", crc)
-    # 拼接编号
-    order = struct.pack(">HH", index, total)
-
-    if test_mode:
-        print(f"index is : {index}, total is : {total}, crc is : {crc}")
-    return order + crc_bytes + block
 
 
 def encode_rs_per_group(group_blocks, bytes_per_frame = cg.bytes_per_frame, rs_factor=cg.rs_factor):
@@ -167,7 +126,7 @@ def encode_rs(raw_data_blocks, rs_group_size = cg.rs_group_size):
     return raw_data_blocks + rs_blocks
 
 
-def generate_qr_sequence(blocks, output_dir="frames_encode"):
+def generate_qr_sequence(blocks, total, output_dir="frames_encode"):
     """
     将数据块序列编码为二维码图片
 
@@ -181,35 +140,38 @@ def generate_qr_sequence(blocks, output_dir="frames_encode"):
     # os.makedirs(output_dir, exist_ok=True)
     
     file_paths = []
-    total = len(blocks)
-
-    for i, block in tqdm(enumerate(blocks), desc="生成图片", total=total):
-        # 设置qr参数
-        qr = qrcode.QRCode(
-        error_correction=qrcode.ERROR_CORRECT_M,    # 15% 纠错
-        box_size=5,
-        border=4
-        )
-
-        encoded_block = base64.b64encode(block)
-        if test_mode:
-            print(f"encode_block size : {len(encoded_block)}")
-        qr.add_data(encoded_block)
-        qr.make(fit=False)
-
-        img = qr.make_image(fill_color="black", back_color="white")
-
+    qrcoder = qr()
+    for i, block in tqdm(enumerate(blocks), desc="生成图片", total=len(blocks)):
         file_path = os.path.join(output_dir, f"frame_{i:05d}.png")
-        img.save(file_path)
         file_paths.append(file_path)
-        if test_mode:
-            print(f"len is {len(encoded_block)}")
-            print(f"qr version is {qr.version}")
+        qrcoder.add_data(block, i, total)
+        qrcoder.make(file_path)
+        # # 设置qr参数
+        # qr = qrcode.QRCode(
+        # error_correction=qrcode.ERROR_CORRECT_M,    # 15% 纠错
+        # box_size=5,
+        # border=4
+        # )
+
+        # encoded_block = base64.b64encode(block)
+        # if test_mode:
+        #     print(f"encode_block size : {len(encoded_block)}")
+        # qr.add_data(encoded_block)
+        # qr.make(fit=False)
+
+        # img = qr.make_image(fill_color="black", back_color="white")
+
+        # file_path = os.path.join(output_dir, f"frame_{i:05d}.png")
+        # img.save(file_path)
+        # file_paths.append(file_path)
+        # if test_mode:
+        #     print(f"len is {len(encoded_block)}")
+        #     print(f"qr version is {qr.version}")
 
     return file_paths
 
 
-def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 4):
+def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 2):
     """
     将图片序列以固定帧率，每个图片重复固定次数，生成视频
     ps: 这部分都是ai写的
@@ -231,11 +193,20 @@ def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 4):
         fps, 
         (w, h)
         )
+    
+    
+    def write_empty_frame(video, empty_frame, repeat):
+        for _ in range(repeat):
+            video.write(empty_frame)
+    
+    white_frame = np.full((h, w, 3), 255, dtype=np.uint8)
+    write_empty_frame(video, white_frame, 2)
 
     for image in tqdm(image_paths, desc="生成视频", total=total):
         frame = cv2.imread(image)
         for _ in range(frame_repeat):   # 重复写入
             video.write(frame)
+        write_empty_frame(video, white_frame, 2)
 
     video.release()
 
@@ -254,58 +225,3 @@ def cal_speed(file_path, image_paths, fps = 60, frame_repeat = 4):
     duration = len(image_paths) * frame_repeat / fps
     return file_size / duration
 
-
-def main():
-    import time
-
-    input_file_path = "test/xmu.txt"
-    output_file_path = "test/output.mp4"
-    frames_file_path = "test/frames_encode"
-
-    # 记录程序开始时间
-    start_time = time.time()
-    
-    if os.path.exists(frames_file_path):
-        shutil.rmtree(frames_file_path)
-    
-    # 记录各阶段开始时间（可选，用于分析各步骤耗时）
-    read_start = time.time()
-    raw_data_blocks, total = read_and_divide(input_file_path)
-    read_end = time.time()
-
-    rs_start = time.time()
-    blocks = encode_rs(raw_data_blocks)
-    rs_end = time.time()
-    
-    header_start = time.time()
-    headed_blocks = add_header(blocks, total)
-    header_end = time.time()
-    
-    qr_start = time.time()
-    os.makedirs(frames_file_path, exist_ok=True)
-    image_paths = generate_qr_sequence(headed_blocks, frames_file_path)
-    qr_end = time.time()
-    
-    video_start = time.time()
-    images_to_video(image_paths, output_file_path)
-    video_end = time.time()
-    
-    # 记录程序结束时间
-    end_time = time.time()
-    
-    # 计算总耗时
-    total_time = end_time - start_time
-    
-    # 打印计时结果
-    print(f"\n程序运行完成")
-    print(f"文件读取与分块: {read_end - read_start:.2f} 秒")
-    print(f"添加rs块: {rs_end - rs_start:.2f} 秒")
-    print(f"添加块头: {header_end - header_start:.2f} 秒")
-    print(f"生成二维码: {qr_end - qr_start:.2f} 秒")
-    print(f"生成视频: {video_end - video_start:.2f} 秒")
-    print(f"总耗时: {total_time:.2f} 秒")
-    print(f"编码速度: {cal_speed(input_file_path, image_paths):.2f} kbps")
-
-
-if __name__ == "__main__":
-    main()

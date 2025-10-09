@@ -1,5 +1,9 @@
 # 忽略测试文件夹
 */frames_encode/
+*/frames_decode/
+*/output/
+*/cool/
+workspace/
 # 忽略视频文件
 *.mp4
 .idea/

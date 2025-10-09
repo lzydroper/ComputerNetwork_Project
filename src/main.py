@@ -3,6 +3,9 @@ import shutil
 import time
 from datetime import datetime
 import encoder as en
+import decoder as de
+
+
 
 """
     莫名其妙的tkinter会有找不到tcl的问题 我目前是直接把tcl的文件放在.venv下 如果你们也有问题可以尝试这么做
@@ -49,18 +52,18 @@ def encode(args):
     blocks = en.encode_rs(raw_data_blocks)
     if args.t:
         rs_end = time.time()
-        header_start = time.time()
+    #     header_start = time.time()
 
-    headed_blocks = en.add_header(blocks, total)
-    if args.t:
-        header_end = time.time()
+    # headed_blocks = en.add_header(blocks, total)
+    # if args.t:
+    #     header_end = time.time()
         qr_start = time.time()
 
     frames_file_path = workspace + "/frames_encode"
     if os.path.exists(frames_file_path):
         shutil.rmtree(frames_file_path)
     os.makedirs(frames_file_path, exist_ok=True)
-    image_paths = en.generate_qr_sequence(headed_blocks, frames_file_path)
+    image_paths = en.generate_qr_sequence(blocks, total, frames_file_path)
     if args.t:
         qr_end = time.time()
         video_start = time.time()
@@ -76,7 +79,7 @@ def encode(args):
         print()
         print(f"文件读取: {read_end - read_start:.2f} 秒")
         print(f"添加rs块: {rs_end - rs_start:.2f} 秒")
-        print(f"添加块头: {header_end - header_start:.2f} 秒")
+        # print(f"添加块头: {header_end - header_start:.2f} 秒")
         print(f"生成图片: {qr_end - qr_start:.2f} 秒")
         print(f"生成视频: {video_end - video_start:.2f} 秒")
         print(f"总计耗时: {total_time:.2f} 秒")
@@ -86,7 +89,60 @@ def encode(args):
 
 
 def decode(args):
-    pass
+    workspace = "workspace"
+    os.makedirs(workspace, exist_ok=True)
+    file_path = select_file()
+    if args.one:
+        import myqr
+        qr = myqr.qr()
+        qr.decode(file_path, workspace, debug=True)
+    else:
+        if args.t:
+            start_time = time.time()
+            read_start = time.time()
+        frames_file_path = workspace + "/frames_decode"
+        if os.path.exists(frames_file_path):
+            shutil.rmtree(frames_file_path)
+        os.makedirs(frames_file_path, exist_ok=True)
+        image_paths = de.read_and_divide(file_path, frames_file_path)
+        if args.t:
+            read_end = time.time()
+            decode_start = time.time()
+        
+        total_data_blocks, total_rs_blocks, parsed_blocks = de.decode_frames(image_paths, frames_file_path, debug=args.d)
+        if args.t:
+            decode_end = time.time()
+            check_start = time.time()
+        
+        blocks = de.check_blocks(parsed_blocks, total_data_blocks, total_rs_blocks)
+        if blocks is None:
+            print("数据块不完整，无法重建文件")
+            return
+        if args.t:
+            check_end = time.time()
+            reconstruct_start = time.time()
+        
+        output_file_path = workspace + "/ouput"
+        os.makedirs(output_file_path, exist_ok=True)
+        output_file = f"{output_file_path}/decoded_{datetime.now().strftime("%Y-%m-%d %H-%M-%S")}.bin"
+        try:
+            de.reconstructed_file(blocks, output_file)
+        except:
+            print("数据块不完整，无法重建文件")
+            return
+        if args.t:
+            reconstruct_end = time.time()
+            end_time = time.time()
+            total_time = end_time - start_time
+            print()
+            print(f"文件读取: {read_end - read_start:.2f} 秒")
+            print(f"解码二维码: {decode_end - decode_start:.2f} 秒")
+            print(f"检查数据块: {check_end - check_start:.2f} 秒")
+            print(f"重建文件: {reconstruct_end - reconstruct_start:.2f} 秒")
+            print(f"总计耗时: {total_time:.2f} 秒")
+        
+        print(f"\n程序运行完成, 文件输出至“{output_file}”")
+
 
 
 def main():
@@ -107,13 +163,15 @@ def main():
                            help="二维码视频解码为文件")
     pa_de.add_argument("--rs", type=bool, default=True, 
                        help="是否添加恢复信息(默认True)")
-    pa_de.add_argument("--skip", type=int, default=0, choices=[0, 1, 2],
-                       help="跳帧模式(0: 全部解码 1: 对比跳帧 2: 间隔跳帧)")
+    pa_de.add_argument("--one", type=bool, default=False,
+                       help="是否只解码一帧(默认False)")
     
     # public
     for p in [pa_en, pa_de]:
         p.add_argument('-t', action='store_true', default=False,
                       help='开启计时功能(默认：关闭)')
+        p.add_argument('-d', action='store_true', default=False,
+                      help='开启调试模式(默认：关闭)')
         
     # handle
     args = pa.parse_args()
