@@ -199,7 +199,7 @@ def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 2):
         frame = cv2.imread(image)
         for _ in range(frame_repeat):   # 重复写入
             video.write(frame)
-        write_empty_frame(video, white_frame, 2)
+        # write_empty_frame(video, white_frame, 2)
 
     write_empty_frame(video, white_frame, 2)
     video.release()
