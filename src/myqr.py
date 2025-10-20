@@ -41,7 +41,7 @@ class qr():
         self.generate_empty_grid()
         self.generate_data_mask()
 
-    # 编码部分
+    # --- 编码部分 ---
     def empty_grid(self, fill=WHITE):
         return np.full((self.H, self.W), fill, dtype=np.uint8)
     
@@ -248,7 +248,7 @@ class qr():
 
         img.save(filename)
 
-    # 解码部分
+    # --- 解码部分 ---
     def _find_finders(self, image):
         """使用OpenCV在图像中寻找三个定位符"""
 
@@ -534,8 +534,6 @@ class qr():
         # 6. RS解码
         # print("Step 5: Reed-Solomon decoding...")
         data, error_blocks, corre_blocks = self._decode_rs(data_bits)
-        if error_blocks > 0:
-            raise RuntimeError(f"Reed-Solomon decoding failed: {error_blocks} errors corrected.")
         if debug:
             import logging
             logging.basicConfig(filename=f"{workspace}/debug_decoding.log", level=logging.DEBUG, format='%(message)s')
@@ -544,7 +542,7 @@ class qr():
               Corrected blocks: {corre_blocks} ({(corre_blocks/self.BLOCK*100):.2f}%)"
             logging.debug(log_msg)
         
-        return data, index, total
+        return data, index, total, error_blocks
     
 
 def encode_test(index = 1, total = 10, output_img="qr_encoded.png", output_data="original_data.bin"):

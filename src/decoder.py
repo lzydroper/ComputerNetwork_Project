@@ -11,13 +11,7 @@ from myqr import qr
 
 
 """"""
-# 大致流程如下：[写入 <- 还原] <- rs <- 块头 <- [base64 <- qr] <- 视频
-# 参数配置
-# bytes_per_frame = cg.bytes_per_frame  # 单块数据量
-# rs_group_size = cg.rs_group_size     # rs块分组大小
-# rs_factor = cg.rs_factor        # 冗余率
-# rs_mode = cg.rs_mode         # rs
-# test_mode = cg.test_mode       # 测试模式
+# 大致流程如下：[写入 <- 还原（最后一块补长还原）] <- rs <- 块头 <- qr <- 视频
 """"""
 
 
@@ -47,12 +41,16 @@ def read_and_divide(input_file_path, output_dir):
     cap.release()
     return file_paths
 
+
 def decode_frames(file_paths, workspace, rs_factor=cg.rs_factor, debug=False):
     """
     读取图片并直接解码保存为raw_data_blocks
 
     参数：
         file_paths(list[str]): 待解码的图片路径列表
+        workspace(str): 工作目录
+        rs_factor(double): 冗余率
+        debug(bool): 是否开启调试模式
     返回：
         tuple(int, int, list[bytes]): 二维码读取出来的数据块总数、rs块总数、数据块列表
     """
@@ -60,11 +58,16 @@ def decode_frames(file_paths, workspace, rs_factor=cg.rs_factor, debug=False):
     total_rs_blocks = -1
     parsed_blocks = []
     qr_decoder = qr()
+    # 捕获异常并记录到日志文件
     import logging
     logging.basicConfig(filename=f"{workspace}/debug_decoding.log", level=logging.DEBUG, format='%(message)s')
+    errors = 0
     for frame_index in tqdm(range(len(file_paths)), desc="解二维码"):
         try:
-            data, index, total = qr_decoder.decode(file_paths[frame_index], workspace, debug)
+            data, index, total, error_blocks = qr_decoder.decode(file_paths[frame_index], workspace, debug)
+            if error_blocks > 0:
+                errors += error_blocks
+                raise RuntimeError(f"Reed-Solomon decoding failed: {error_blocks} errors corrected.")
             # print(f"index is :{index}, total is :{total}")
             if total_data_blocks == -1:
                 total_data_blocks = total
@@ -80,12 +83,13 @@ def decode_frames(file_paths, workspace, rs_factor=cg.rs_factor, debug=False):
             continue
     return total_data_blocks, total_rs_blocks, parsed_blocks
 
+
 def check_blocks(parsed_blocks, total_data_blocks, total_rs_blocks):
     """
     遍历查询缺失块，若可能则进行恢复，若无法恢复，返回缺失块数量或索引列表
     
     参数：
-        parsed_blocks[bytes or None]: 已去重并校验过crc的块表 若缺失则为None 0-total为数据块 total以后为rs块
+        parsed_blocks[bytes or None]: 块表 若缺失则为None 0-total为数据块 total以后为rs块
         total_data_blocks(int): 总数据块数
         total_rs_blocks(int): 总rs块数
     返回：
@@ -112,6 +116,7 @@ def decode_rs_per_group(group_blocks, data_blocks_num, rs_blocks_num, bytes_per_
         group_blocks[bytes or None]: 该组块 前半部分为数据块 后半部分为rs块
         data_blocks_num(int): 原始数据块数目
         rs_blocks_num(int): 冗余块数目
+        bytes_per_frame(int): 每块字节数
     返回：
         restored_grou[bytes]: 还原的该组原始数据
     """

@@ -83,7 +83,7 @@ def encode(args):
         print(f"生成图片: {qr_end - qr_start:.2f} 秒")
         print(f"生成视频: {video_end - video_start:.2f} 秒")
         print(f"总计耗时: {total_time:.2f} 秒")
-        print(f"编码速度: {en.cal_speed(file_path, image_paths):.2f} kbps")
+        print(f"编码速度: {en.cal_speed(file_path, output_file):.2f} kbps")
     
     print(f"\n程序运行完成, 文件输出至“{output_file}”")
 
@@ -96,7 +96,8 @@ def decode(args):
         import myqr
         qr = myqr.qr()
         try:
-            qr.decode(file_path, workspace, debug=True)
+            data, index, total, error_blocks =qr.decode(file_path, workspace, debug=True)
+            print(f"index/total is:{index}/{total}  error_blocks is: {error_blocks}")
         except Exception as e:
             print(f"error: {e}")
             exit(1)
@@ -150,6 +151,8 @@ def decode(args):
 
 
 def main():
+    # 别看很多参数，其实都没写逻辑，用不了
+    # 本来想尝试像那种很酷的都是-e
     import argparse as ap
     pa = ap.ArgumentParser(description="文件/二维码视频互转")
     spa = pa.add_subparsers(dest="mode", required=True, 
@@ -165,9 +168,10 @@ def main():
     # decoder arg
     pa_de = spa.add_parser("decode", aliases="d", 
                            help="二维码视频解码为文件")
-    pa_de.add_argument("--rs", type=bool, default=True, 
+    pa_de.add_argument("--rs", action="store_false", default=True, 
                        help="是否添加恢复信息(默认True)")
-    pa_de.add_argument("--one", type=bool, default=False,
+    # 这个是测试用的，跑出来看看哪些帧出问题，直接跑这帧看看什么问题
+    pa_de.add_argument("--one", action="store_true", default=False,
                        help="是否只解码一帧(默认False)")
     
     # public

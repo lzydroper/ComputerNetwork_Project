@@ -13,17 +13,7 @@ from myqr import qr
 
 
 """"""
-# 大致流程如下：[分组 -> 补长] -> rs -> 块头 -> [base64 -> qr] -> 视频
-# 参数配置
-# bytes_per_frame = cg.bytes_per_frame  # 单块数据量
-# rs_group_size = cg.rs_group_size     # rs块分组大小
-# rs_factor = cg.rs_factor        # 冗余率
-# rs_mode = cg.rs_mode         # rs
-test_mode = cg.test_mode       # 测试模式
-# FLAG_START = b'S'    # 起始标志
-# FLAG_DATA = b'D'     # 数据标志
-# FLAG_END = b'E'      # 结束标志
-# FLAG_REDUNDANT = b'R'# 冗余标志
+# 大致流程如下：[分组 -> 补长] -> rs -> 块头 -> qr -> 视频
 """"""
 
 
@@ -33,6 +23,8 @@ def read_and_divide(file_path, bytes_per_frame = cg.bytes_per_frame, rs_mode=cg.
     
     参数：
         file_path (str): 文件路径
+        bytes_per_frame(int): 每块字节数
+        rs_mode(bool): 是否开启rs模式
     返回:
         list[bytes]: 原始数据块
         total(int): 块总数
@@ -82,6 +74,8 @@ def encode_rs_per_group(group_blocks, bytes_per_frame = cg.bytes_per_frame, rs_f
 
     参数：
         group_blocks[bytes]: 单组原始数据块
+        bytes_per_frame(int): 每块字节数
+        rs_factor(double): 冗余率
     返回：
         list[bytes]: 该组冗余数据块
     """
@@ -194,7 +188,6 @@ def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 2):
         (w, h)
         )
     
-    
     def write_empty_frame(video, empty_frame, repeat):
         for _ in range(repeat):
             video.write(empty_frame)
@@ -208,20 +201,23 @@ def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 2):
             video.write(frame)
         write_empty_frame(video, white_frame, 2)
 
+    write_empty_frame(video, white_frame, 2)
     video.release()
 
 
-def cal_speed(file_path, image_paths, fps = 60, frame_repeat = 4):
+# 别问为什么有两种函数注释模式，因为我才知道还有这种写法，前面的就懒得改了
+def cal_speed(file_path, video_path):
     """
-    计算编码速度
+    计算传输速度
 
     :param file_path: 原始文件路径
-    :param image_path: 二维码图片路径
-    :param fps: 视频帧率
-    :param frame_repeat: 每个二维码图片重复次数
+    :param video_path: 视频文件路径
     :return: 编码速度kbps
     """
     file_size = os.path.getsize(file_path) * 8 / 1000   # kb
-    duration = len(image_paths) * frame_repeat / fps
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    duration = frame_count / fps
+    # print(f"duration is {duration}, file_size is {file_size}")
     return file_size / duration
-
