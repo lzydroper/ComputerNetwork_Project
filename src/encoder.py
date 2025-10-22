@@ -165,7 +165,7 @@ def generate_qr_sequence(blocks, total, output_dir="frames_encode"):
     return file_paths
 
 
-def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 2):
+def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 2, clip_time = 1.0):
     """
     将图片序列以固定帧率，每个图片重复固定次数，生成视频
     ps: 这部分都是ai写的
@@ -175,6 +175,7 @@ def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 2):
         output_path(str): 视频输出位置，包含后缀
         fps(int): 输出帧率
         frame_repeat(int): 每帧重复次数
+        clip_time(float): 视频最大时长
     """
     # 设置分辨率
     frame = cv2.imread(image_paths[0])
@@ -188,21 +189,37 @@ def images_to_video(image_paths, output_path, fps = 60, frame_repeat = 2):
         (w, h)
         )
     
+    max_total_frames = math.floor(clip_time * fps)
+    frames_written = 0
+    
     def write_empty_frame(video, empty_frame, repeat):
         for _ in range(repeat):
+            if frames_written >= max_total_frames:
+                break
             video.write(empty_frame)
-    
+            frames_written += 1
+
     white_frame = np.full((h, w, 3), 255, dtype=np.uint8)
     write_empty_frame(video, white_frame, 2)
 
-    for image in tqdm(image_paths, desc="生成视频", total=total):
+    pbar = tqdm(image_paths, desc="生成视频", total=len(image_paths))
+    for image in pbar:
+    # for image in tqdm(image_paths, desc="生成视频", total=total):
+        if frames_written + frame_repeat > max_total_frames:
+            pbar.set_postfix_str(f"达到时长限制 {clip_time}s，提前终止")
+            break # 如果写入下一张图片的所有重复帧会超过总时长，则提前终止循环
         frame = cv2.imread(image)
         for _ in range(frame_repeat):   # 重复写入
             video.write(frame)
+        frames_written += frame_repeat
+        pbar.close()
         # write_empty_frame(video, white_frame, 2)
 
     write_empty_frame(video, white_frame, 2)
     video.release()
+    actual_duration = frames_written / fps
+    print(f"\n视频生成完毕: {output_path}")
+    print(f"目标时长: <= {clip_time:.2f}s, 实际生成时长: {actual_duration:.2f}s ({frames_written} 帧 @ {fps} FPS)")
 
 
 # 别问为什么有两种函数注释模式，因为我才知道还有这种写法，前面的就懒得改了

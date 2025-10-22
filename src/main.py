@@ -71,7 +71,7 @@ def encode(args):
     output_file_path = workspace + "/ouput"
     os.makedirs(output_file_path, exist_ok=True)
     output_file = f"{output_file_path}/{datetime.now().strftime("%Y-%m-%d %H-%M-%S")}.mp4"
-    en.images_to_video(image_paths, output_file, args.fps, args.repeat)
+    en.images_to_video(image_paths, output_file, args.fps, args.repeat, args.clip)
     if args.t:
         video_end = time.time()
         end_time = time.time()
@@ -131,7 +131,7 @@ def decode(args):
         os.makedirs(output_file_path, exist_ok=True)
         output_file = f"{output_file_path}/decoded_{datetime.now().strftime("%Y-%m-%d %H-%M-%S")}.bin"
         try:
-            de.reconstructed_file(blocks, output_file)
+            messages = de.reconstructed_file(blocks, output_file)
         except:
             print("数据块不完整，无法重建文件")
             return
@@ -147,6 +147,13 @@ def decode(args):
             print(f"总计耗时: {total_time:.2f} 秒")
         
         print(f"\n程序运行完成, 文件输出至“{output_file}”")
+        print("\n" + "="*20 + " 解码报告 " + "="*20)
+        if not messages:
+            print("所有操作均成功完成，未报告任何问题。")
+        else:
+            for msg in messages:
+                print(f"[*] {msg}")
+        print("="*52)
 
 
 
@@ -164,12 +171,14 @@ def main():
                        help="帧率(默认60)")
     pa_en.add_argument("--repeat", type=int, default=4, choices=range(2,60),
                        help="重复次数(默认4)")
+    pa_en.add_argument("--clip", type=float, default=1.0,
+                       help="视频最大时长(默认1.0s)")
     
     # decoder arg
     pa_de = spa.add_parser("decode", aliases="d", 
                            help="二维码视频解码为文件")
     pa_de.add_argument("--rs", action="store_false", default=True, 
-                       help="是否添加恢复信息(默认True)")
+                       help="是否开启全局冗余(默认True)")
     # 这个是测试用的，跑出来看看哪些帧出问题，直接跑这帧看看什么问题
     pa_de.add_argument("--one", action="store_true", default=False,
                        help="是否只解码一帧(默认False)")

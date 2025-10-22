@@ -105,7 +105,8 @@ pip install -r requirements.txt
 
 ```powershell
 python src/main.py -h	# 查看帮助
-python src/main.py e 	# 编码文件
+python src/main.py e 	# 编码文件，默认限定最大时长为1.0s
 python src/main.py d	# 解码文件
+python src/main.py e --clip 3.0 	# 编码文件并限定最大时长为指定值，单位s
 ```
 
